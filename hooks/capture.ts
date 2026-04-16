@@ -70,7 +70,16 @@ async function flushMessages(
   }
 
   const newRawMessages = messages.slice(startIndex);
-  const extracted = extractMessages(newRawMessages, state.ownerPeer!, agentPeer, state.cfg.noisePatterns);
+  const agentNames = new Set(
+    Object.keys(state.agentPeerMap ?? {}).map((n) => n.toLowerCase()),
+  );
+  const extracted = extractMessages(
+    newRawMessages,
+    state.ownerPeer!,
+    agentPeer,
+    state.cfg.noisePatterns,
+    agentNames,
+  );
 
   if (extracted.length === 0) {
     await session.setMetadata({ ...existingMeta, ...sessionMeta, lastSavedIndex: messages.length });

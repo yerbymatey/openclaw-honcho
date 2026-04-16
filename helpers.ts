@@ -119,6 +119,67 @@ function stripInboundMetadata(text: string): string {
 }
 
 /**
+ * Strip OpenClaw's `System: [timestamp] Slack ...` scaffolding lines that
+ * describe Slack activity (reactions, edits, deletes, cross-agent messages).
+ * These lines arrive in `role: "user"` inbound messages and would otherwise
+ * be attributed to the owner peer — polluting the owner's representation
+ * with agent-authored content and UX noise.
+ *
+ * - Drops Slack reaction/edit/delete lines outright (UX noise).
+ * - Drops `Slack message in X from <agent>: ...` lines whose sender is a
+ *   known agent handle, plus continuation lines until the next recognized
+ *   System line (agents can write multi-line messages).
+ * - Keeps `Slack message in X from Gene Hwang: ...` and unknown senders
+ *   intact — those may contain real owner-authored content.
+ *
+ * agentNames is a set of lowercase agent handles to treat as non-owner.
+ */
+const SLACK_REACTION_LINE_RE = /^System: \[[^\]]+\] Slack reaction (added|removed)/;
+const SLACK_EDIT_DELETE_LINE_RE = /^System: \[[^\]]+\] Slack message (edited|deleted)/;
+const SLACK_INBOUND_MESSAGE_LINE_RE =
+  /^System: \[[^\]]+\] Slack message in \S+ from ([^:]+):/;
+const SLACK_SYSTEM_PREFIX_RE = /^System: \[[^\]]+\] Slack /;
+
+export function stripSystemSlackNoise(text: string, agentNames: Set<string>): string {
+  if (!text.includes("System: [")) return text;
+  const lines = text.split("\n");
+  const kept: string[] = [];
+  let skippingAgentBlock = false;
+
+  for (const line of lines) {
+    if (SLACK_REACTION_LINE_RE.test(line)) {
+      skippingAgentBlock = false;
+      continue;
+    }
+    if (SLACK_EDIT_DELETE_LINE_RE.test(line)) {
+      skippingAgentBlock = false;
+      continue;
+    }
+    const m = line.match(SLACK_INBOUND_MESSAGE_LINE_RE);
+    if (m) {
+      const sender = m[1].trim().toLowerCase();
+      if (agentNames.has(sender)) {
+        skippingAgentBlock = true;
+        continue;
+      }
+      skippingAgentBlock = false;
+      kept.push(line);
+      continue;
+    }
+    // Any other recognized System: Slack line ends the agent-block skip.
+    if (SLACK_SYSTEM_PREFIX_RE.test(line)) {
+      skippingAgentBlock = false;
+      kept.push(line);
+      continue;
+    }
+    if (skippingAgentBlock) continue;
+    kept.push(line);
+  }
+
+  return kept.join("\n").trim();
+}
+
+/**
  * Strip Honcho's own injected context from message content to prevent
  * feedback loops (context injected -> saved -> re-injected -> grows forever).
  * Also strips OpenClaw's inbound metadata blocks (Conversation info, Sender,
@@ -169,7 +230,8 @@ export function extractMessages(
   rawMessages: unknown[],
   ownerPeer: Peer,
   agentPeer: Peer,
-  noisePatterns: string[] = []
+  noisePatterns: string[] = [],
+  agentNames: Set<string> = new Set()
 ): MessageInput[] {
   const result: MessageInput[] = [];
 
@@ -197,6 +259,9 @@ export function extractMessages(
     }
 
     content = cleanMessageContent(content);
+    if (role === "user" && agentNames.size > 0) {
+      content = stripSystemSlackNoise(content, agentNames);
+    }
     content = content.trim();
 
     if (!content) continue;

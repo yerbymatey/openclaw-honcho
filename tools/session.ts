@@ -63,7 +63,7 @@ export function registerSessionTool(api: OpenClawPluginApi, state: PluginState):
             tokens: messageLimit,
             peerTarget: state.ownerPeer!,
             peerPerspective: agentPeer,
-            searchQuery: searchQuery,
+            representationOptions: searchQuery ? { searchQuery } : undefined,
           });
 
           const sections: string[] = [];
